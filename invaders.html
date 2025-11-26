@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Pickle Defender vs Santa Invaders</title>
+  <style>
+    html,body{height:100%;margin:0;background:#071020;color:#fff;font-family:system-ui,Segoe UI,Roboto,Arial}
+    #game{display:block;margin:0 auto;background:#04121a;box-shadow:0 10px 30px rgba(0,0,0,.6);}
+    .overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none}
+    .panel{background:rgba(0,0,0,.6);padding:16px 24px;border-radius:8px;pointer-events:auto;text-align:center}
+    button{font-size:16px;padding:8px 12px;margin-top:8px}
+    .hud{position:fixed;left:12px;top:12px;background:rgba(0,0,0,.4);padding:8px 12px;border-radius:6px}
+    .hud .hint{opacity:.8;font-size:12px}
+  </style>
+</head>
+<body>
+<canvas id="game" width="640" height="480" tabindex="0"></canvas>
+<div class="hud">
+  <div id="score">Score: 0</div>
+  <div id="lives">Lives: 3</div>
+  <div class="hint">← → to move • Space to shoot • Esc to Pause</div>
+</div>
+<div id="overlay" class="overlay"></div>
+<script>
+(() => {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+
+  // Game variables
+  let score = 0;
+  let lives = 3;
+  let paused = false;
+  let gameOver = false;
+  let playing = false;
+
+  // DOM
+  const overlay = document.getElementById('overlay');
+  const scoreEl = document.getElementById('score');
+  const livesEl = document.getElementById('lives');
+
+  // Player
+  const player = {x: W/2, y: H - 40, w: 36, h: 12, speed: 240, cooldown: 0};
+  const keys = {};
+  const bullets = []; // pickles
+
+  // Invaders (Santa grid)
+  const rows = 4, cols = 8;
+  const invaders = [];
+  let invDir = 1; // 1 -> right, -1 -> left
+  let invSpeed = 20; // pixels per second
+  let invDrop = 18;
+  let invTimer = 0;
+
+  function initInvaders(){
+    invaders.length = 0;
+    const startX = 60, startY = 60;
+    const gapX = 56, gapY = 44;
+    for(let r=0;r<rows;r++){
+      for(let c=0;c<cols;c++){
+        invaders.push({x:startX + c*gapX, y:startY + r*gapY, r, c, w:40, h:32, alive:true, bob: Math.random()*Math.PI*2});
+      }
+    }
+  }
+
+  initInvaders();
+
+  // Controls
+  canvas.addEventListener('keydown', e => { if(e.key==='Escape'){ togglePause(); e.preventDefault(); } else keys[e.code]=true; });
+  canvas.addEventListener('keyup', e => { keys[e.code]=false; if(e.code==='Space') player.cooldown=0; });
+  canvas.focus();
+
+  function togglePause(){
+    if(gameOver) return;
+    paused = !paused;
+    renderOverlay();
+  }
+
+  function startGame(){
+    score = 0; lives = 3; gameOver = false; paused = false; playing = true;
+    player.x = W/2; bullets.length=0; initInvaders(); invSpeed = 20; invDir=1;
+    overlay.innerHTML='';
+  }
+
+  function endGame(){
+    gameOver = true; playing = false; paused = false;
+    renderOverlay();
+  }
+
+  function renderOverlay(){
+    overlay.innerHTML = '';
+    if(!playing){
+      const panel = document.createElement('div'); panel.className='panel';
+      panel.innerHTML = `<h2>Pickle Defender vs Santa Invaders</h2><div>Defend the cookies — shoot Santa with pickles!</div>`;
+      const btn = document.createElement('button'); btn.textContent='Start Game'; btn.onclick = startGame;
+      panel.appendChild(btn); overlay.appendChild(panel);
+    } else if(paused){
+      const panel = document.createElement('div'); panel.className='panel';
+      panel.innerHTML = `<h2>Paused</h2><div>Press Esc to resume</div>`;
+      overlay.appendChild(panel);
+    } else if(gameOver){
+      const panel = document.createElement('div'); panel.className='panel';
+      panel.innerHTML = `<h2>Game Over</h2><div>Score: ${score}</div>`;
+      const btn = document.createElement('button'); btn.textContent='Play Again'; btn.onclick = startGame;
+      panel.appendChild(btn); overlay.appendChild(panel);
+    }
+  }
+
+  renderOverlay();
+
+  // Helpers for drawing Santas and pickles
+  function drawSanta(x,y,w,h){
+    // simple Santa face/body with hat
+    ctx.save();
+    ctx.translate(x, y);
+    // body
+    ctx.fillStyle = '#c22'; ctx.fillRect(-w/2, -h/2 + 6, w, h-6);
+    // beard
+    ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.moveTo(-w/2 + 6, -h/2 + 6); ctx.quadraticCurveTo(0, h/2+4, w/2 -6, -h/2 +6); ctx.fill();
+    // head
+    ctx.fillStyle = '#ffd4b2'; ctx.beginPath(); ctx.arc(0, -h/2 + 2, 8, 0, Math.PI*2); ctx.fill();
+    // hat
+    ctx.fillStyle = '#c11'; ctx.beginPath(); ctx.moveTo(-w/2+4, -h/2-4); ctx.lineTo(0, -h/2-18); ctx.lineTo(w/2-4, -h/2-4); ctx.closePath(); ctx.fill();
+    ctx.fillStyle='#fff'; ctx.beginPath(); ctx.arc(0, -h/2-18, 5, 0, Math.PI*2); ctx.fill();
+    ctx.restore();
+  }
+  function drawPickle(b){
+    ctx.save(); ctx.translate(b.x, b.y);
+    ctx.rotate(b.rot || 0);
+    ctx.fillStyle = '#6aa84f'; ctx.beginPath(); ctx.ellipse(0,0,6,12,0,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='#2e7d32'; ctx.fillRect(-2, -6, 4, 12);
+    ctx.restore();
+  }
+
+  // Collision helper
+  function rectsIntersect(a,b){
+    return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+  }
+
+  // Game loop
+  let last = performance.now();
+  function loop(now){
+    const dt = Math.min(0.033, (now - last)/1000); last = now;
+    update(dt);
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  function update(dt){
+    if(!playing || paused || gameOver) return;
+
+    // player movement
+    const left = keys['ArrowLeft'] || keys['KeyA'];
+    const right = keys['ArrowRight'] || keys['KeyD'];
+    if(left) player.x -= player.speed * dt;
+    if(right) player.x += player.speed * dt;
+    player.x = Math.max(player.w/2, Math.min(W - player.w/2, player.x));
+
+    // shooting
+    player.cooldown -= dt;
+    if((keys['Space'] || keys['KeyW'] || keys['ArrowUp']) && player.cooldown <= 0){
+      bullets.push({x:player.x, y:player.y - 16, vx:0, vy:-320, w:8, h:18, rot:0});
+      player.cooldown = 0.35; // seconds
+    }
+
+    // bullets
+    for(let i=bullets.length-1;i>=0;i--){
+      const b = bullets[i]; b.x += b.vx * dt; b.y += b.vy * dt; b.rot += dt*6;
+      if(b.y < -20) bullets.splice(i,1);
+    }
+
+    // invaders movement: simple group movement
+    invTimer += dt;
+    if(invTimer > 0.15){
+      // determine bounds
+      let minX=Infinity,maxX=-Infinity;
+      for(const inv of invaders) if(inv.alive){ minX=Math.min(minX,inv.x - inv.w/2); maxX=Math.max(maxX, inv.x + inv.w/2); }
+      // flip if hitting edges
+      if(maxX + invSpeed*invDir*invTimer > W - 10 || minX + invSpeed*invDir*invTimer < 10){
+        invDir *= -1; for(const inv of invaders) if(inv.alive) inv.y += invDrop;
+      } else {
+        for(const inv of invaders) if(inv.alive) inv.x += invSpeed*invDir*invTimer;
+      }
+      invTimer = 0;
+    }
+
+    // invader bobbing & simple shooting chance
+    // collisions: bullets vs invaders
+    for(let i=invaders.length-1;i>=0;i--){
+      const inv = invaders[i];
+      if(!inv.alive) continue;
+      // bob
+      inv.bob += dt*6;
+      // check collisions
+      for(let j=bullets.length-1;j>=0;j--){
+        const b = bullets[j];
+        const invRect = {x:inv.x - inv.w/2, y:inv.y - inv.h/2, w:inv.w, h:inv.h};
+        const bRect = {x:b.x - b.w/2, y:b.y - b.h/2, w:b.w, h:b.h};
+        if(rectsIntersect(invRect, bRect)){
+          inv.alive = false; bullets.splice(j,1); score += 10;
+        }
+      }
+      // reach bottom -> player hit
+      if(inv.y + inv.h/2 > player.y - 6){ lives -= 1; inv.alive = false; if(lives <= 0) endGame(); }
+    }
+
+    // speed up with fewer invaders
+    const aliveCount = invaders.filter(i=>i.alive).length;
+    invSpeed = 20 + (rows*cols - aliveCount) * 2.5;
+
+    // update HUD
+    scoreEl.textContent = 'Score: ' + score;
+    livesEl.textContent = 'Lives: ' + lives;
+
+    // win condition
+    if(aliveCount === 0){ // next wave
+      initInvaders(); invSpeed += 6; score += 50;
+    }
+  }
+
+  function draw(){
+    // background
+    ctx.fillStyle = '#04121a'; ctx.fillRect(0,0,W,H);
+    // stars
+    for(let i=0;i<60;i++){ ctx.fillStyle = i%7? '#083' : '#124'; const sx = (i*37)%W; const sy = (i*53)%H; ctx.fillRect(sx, sy, 1,1); }
+
+    // draw player (pickle cannon)
+    ctx.save();
+    ctx.translate(player.x, player.y);
+    // cannon base
+    ctx.fillStyle = '#7b5e2b'; ctx.fillRect(-20, -6, 40, 12);
+    // turret
+    ctx.fillStyle = '#3e2723'; ctx.beginPath(); ctx.moveTo(-6,-6); ctx.lineTo(12,-18); ctx.lineTo(18,-16); ctx.lineTo(0,0); ctx.closePath(); ctx.fill();
+    // little pickle ammo rack
+    ctx.fillStyle = '#6aa84f'; ctx.fillRect(-4, -14, 8, 8);
+    ctx.restore();
+
+    // draw bullets (pickles)
+    for(const b of bullets) drawPickle(b);
+
+    // draw invaders (Santa)
+    for(const inv of invaders){
+      if(!inv.alive) continue;
+      const bobY = Math.sin(inv.bob) * 4;
+      drawSanta(inv.x, inv.y + bobY, inv.w, inv.h);
+    }
+
+    // HUD fade at top-left handled by DOM
+
+    // paused/game overlay handled separately
+    if(paused){
+      ctx.save(); ctx.fillStyle='rgba(0,0,0,0.4)'; ctx.fillRect(0,0,W,H); ctx.restore();
+    }
+
+    if(gameOver){ ctx.save(); ctx.fillStyle='rgba(0,0,0,0.6)'; ctx.fillRect(0,0,W,H); ctx.restore(); }
+  }
+
+  // start loop
+  requestAnimationFrame(loop);
+
+  // Accessibility: focus canvas when clicked
+  canvas.addEventListener('click', ()=>canvas.focus());
+
+  // Expose toggle for Escape pressed anywhere
+  window.addEventListener('keydown', e=>{ if(e.key==='Escape'){ togglePause(); e.preventDefault(); } });
+
+})();
+</script>
+</body>
+</html>
